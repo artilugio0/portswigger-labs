@@ -5,4 +5,5 @@ This repository contains a collection of solutions to the [PortSwigger Labs](htt
 All of the solutions were developed live on [Twitch](https://www.twitch.tv/elaleman_v)
 
 ## Index
-- [Username enumeration via different responses](username-enumeration-via-different-responses)
+- Authentication
+    - [Username enumeration via different responses](username-enumeration-via-different-responses)
