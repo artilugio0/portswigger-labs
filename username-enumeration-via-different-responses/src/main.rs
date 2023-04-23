@@ -33,8 +33,11 @@ async fn main() {
         .map(|line| line.trim().to_string())
         .collect::<Vec<_>>();
 
-    let passwords_wordlist = include_str!("../files/passwords_wordlist.txt")
+    let passwords_wordlist = tokio::fs::read_to_string(args.passwords_wordlist)
+        .await
+        .unwrap()
         .lines()
+        .map(|line| line.trim().to_string())
         .collect::<Vec<_>>();
 
     let valid_users = sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
