@@ -7,5 +7,6 @@ edition = "2021"
 
 [dependencies]
 async-channel = "1.8.0"
+clap = { version = "4.2.4", features = ["derive"] }
 reqwest = "0.11.16"
 tokio = { version = "1.27.0", features = ["full"] }
